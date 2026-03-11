@@ -1,7 +1,7 @@
 # DailyMe
 
 <p align="center">
-    <img src="Assets.xcassets/AppIcon.appiconset/appicon.png" width="128" height="128" />
+    <img src="Assets.xcassets/AppIcon.appiconset/改图鸭.png" width="128" height="128" />
 </p>
 
 <p align="center">
