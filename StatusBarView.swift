@@ -7,6 +7,12 @@ struct StatusBarView: View {
     @State private var showDeleteConfirmation = false
     @State private var showQuitConfirmation = false
     
+    private var appVersion: String {
+    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+    let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+    return "v\(version) (\(build))"
+}
+
     private var lastPhotoTimeString: String {
         if lastPhotoDate == 0 {
             return "尚未拍摄"
@@ -19,11 +25,27 @@ struct StatusBarView: View {
     
     var body: some View {
         VStack(spacing: 12) {
+            // 顶部标题区
+            HStack {
+                Image(systemName: "camera.fill")
+                    .font(.title3)
+                    .foregroundColor(.accentColor)
+                Text("DailyMe")
+                    .font(.headline)
+                Text(appVersion)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+
             // 拍照按钮
             Button(action: {
+                print("[StatusBarView] 拍照按钮被点击, saveDirectory: \(saveDirectory)")
                 if saveDirectory.isEmpty {
+                    print("[StatusBarView] 保存目录为空，显示提示")
                     showDirectoryAlert = true
                 } else {
+                    print("[StatusBarView] 调用 capturePhoto")
                     CameraManager.shared.capturePhoto(forceCapture: true)
                 }
             }) {
@@ -68,7 +90,21 @@ struct StatusBarView: View {
                 }
                 
                 Spacer()
-                
+
+                // 测试模式指示器
+                if AppSettings.shared.testModeEnabled {
+                    Image(systemName: "flask.fill")
+                        .foregroundColor(.orange)
+                        .help("测试模式已启用")
+                }
+
+                // 查看日志按钮
+                Button(action: {
+                    LogManager.shared.openLogFile()
+                }) {
+                    Image(systemName: "doc.text")
+                }
+
                 // 删除按钮
                 Button(role: .destructive, action: {
                     showDeleteConfirmation = true

@@ -3,107 +3,149 @@ import SwiftUI
 import ServiceManagement
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    // 状态栏图标项
-    var statusItem: NSStatusItem?
-    // 弹出窗口
-    var popover: NSPopover?
-    // 用于跟踪相机初始化状态
-    private var isCameraInitializing = false
+    private var statusItem: NSStatusItem?
+    private var popover: NSPopover?
+    
+    private let captureLock = NSLock()
+    private var isCapturing = false
+    private var lastCaptureTime: Date = .distantPast
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 在最开始添加这行代码
-        ProcessInfo.processInfo.processName = ""  // 这会隐藏 Dock 图标
+        ProcessInfo.processInfo.processName = ""
         
-        // 创建状态栏图标
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let statusButton = statusItem?.button {
-            // 设置图标为相机图标
-            statusButton.image = NSImage(systemSymbolName: "camera", accessibilityDescription: "Daily Selfie")
+        setupStatusItem()
+        setupPopover()
+        setupNotificationObservers()
+        setupLaunchAtLogin()
+        // 初始化日志管理器
+        LogManager.shared.log("应用初始化完成")
+
+        // 检查测试模式
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-testMode") {
+            AppSettings.shared.testModeEnabled = true
+            LogManager.shared.log("测试模式已启用", level: .info)
         }
-        
-        // 创建弹出菜单
+    }
+    
+    private func setupStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let button = statusItem?.button {
+            button.image = NSImage(systemSymbolName: "camera", accessibilityDescription: "Daily Selfie")
+            button.action = #selector(togglePopover)
+        }
+    }
+    
+    private func setupPopover() {
         let popover = NSPopover()
-        // 设置弹出窗口大小
         popover.contentSize = NSSize(width: 300, height: 200)
-        // 设置点击其他地方自动关闭
         popover.behavior = .transient
-        // 设置弹出窗口的内容视图
         popover.contentViewController = NSHostingController(rootView: StatusBarView())
         self.popover = popover
-        
-        // 为状态栏图标添加点击事件
-        statusItem?.button?.action = #selector(togglePopover)
-        
-        // 注册系统唤醒事件监听器
+    }
+    
+    private func setupNotificationObservers() {
+        // 监听屏幕唤醒通知
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
-            selector: #selector(screenDidUnlock(_:)),
+            selector: #selector(handleWake),
             name: NSWorkspace.didWakeNotification,
             object: nil
         )
-        
-        // 注册登录窗口解锁事件监听器
+
+        // 监听屏幕解锁通知 (更可靠的方法)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleScreenUnlock),
+            name: NSWorkspace.screensDidWakeNotification,
+            object: nil
+        )
+
+        // 使用本地通知中心的屏幕解锁监听作为备用
         DistributedNotificationCenter.default().addObserver(
             self,
-            selector: #selector(screenDidUnlock),
+            selector: #selector(handleScreenUnlock),
             name: NSNotification.Name("com.apple.screenIsUnlocked"),
             object: nil
         )
-        
-        // 配置开机自启动
-        setupLaunchAtStartup()
+
+        LogManager.shared.log("通知观察者已注册", level: .info)
     }
     
-    // 切换弹出窗口的显示状态
-    @objc func togglePopover() {
-        if let button = statusItem?.button {
-            if popover?.isShown == true {
-                popover?.performClose(nil)
-            } else {
-                popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            }
+    @objc private func togglePopover() {
+        guard let button = statusItem?.button else { return }
+        if popover?.isShown == true {
+            popover?.performClose(nil)
+        } else {
+            popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
     }
     
-    // 屏幕解锁时触发拍照
-    @objc func screenDidUnlock(_ notification: Notification) {
-        // 避免重复初始化
-        guard !isCameraInitializing else { return }
-        isCameraInitializing = true
-        
-        // 预初始化相机
+    @objc private func handleWake(_ notification: Notification) {
+        handleScreenEvent()
+    }
+    
+    @objc private func handleScreenUnlock(_ notification: Notification) {
+        LogManager.shared.log("收到屏幕解锁通知", level: .info)
+        handleScreenEvent()
+    }
+
+    private func handleScreenEvent() {
+        LogManager.shared.log("handleScreenEvent 被调用", level: .debug)
+
+        captureLock.lock()
+        defer { captureLock.unlock() }
+
+        let now = Date()
+        if now.timeIntervalSince(lastCaptureTime) < 60 {
+            LogManager.shared.log("距离上次拍摄不足60秒，跳过", level: .debug)
+            return
+        }
+
+        guard !isCapturing else {
+            LogManager.shared.log("正在拍摄中，跳过", level: .debug)
+            return
+        }
+        isCapturing = true
+        lastCaptureTime = now
+
+        LogManager.shared.log("开始初始化相机...", level: .info)
+
         let camera = CameraManager.shared
         camera.preInitializeCamera()
-        
-        // 4秒后进行拍照
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+            LogManager.shared.log("4秒后开始拍照", level: .info)
             camera.capturePhoto(forceCapture: false)
-            self?.isCameraInitializing = false
+            self?.captureLock.lock()
+            self?.isCapturing = false
+            self?.captureLock.unlock()
         }
     }
     
-    // 设置开机自启动
-    func setupLaunchAtStartup() {
+    private func setupLaunchAtLogin() {
         if #available(macOS 13.0, *) {
+            let service = SMAppService.mainApp
             do {
-                try SMAppService.mainApp.register()
+                try service.register()
+                LogManager.shared.log("登录启动项已注册", level: .info)
             } catch {
-                print("设置开机自启动失败：\(error.localizedDescription)")
+                LogManager.shared.log("设置开机自启动失败：\(error.localizedDescription)", level: .error)
             }
-        } else {
-            // 对于旧版本 macOS，提示用户手动设置
-            let alert = NSAlert()
-            alert.messageText = "开机自启动设置"
-            alert.informativeText = "请在系统设置中手动添加本应用到登录项中"
-            alert.alertStyle = .informational
-            alert.addButton(withTitle: "打开系统设置")
-            alert.addButton(withTitle: "取消")
-            
-            if alert.runModal() == .alertFirstButtonReturn {
-                if let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings") {
-                    NSWorkspace.shared.open(url)
-                }
+
+            // 检查当前状态
+            switch service.status {
+            case .enabled:
+                LogManager.shared.log("登录启动项状态: 已启用", level: .info)
+            case .notRegistered:
+                LogManager.shared.log("登录启动项状态: 未注册", level: .info)
+            case .notFound:
+                LogManager.shared.log("登录启动项状态: 未找到", level: .info)
+            case .requiresApproval:
+                LogManager.shared.log("登录启动项状态: 需要用户批准", level: .info)
+            @unknown default:
+                LogManager.shared.log("登录启动项状态: 未知状态", level: .info)
             }
         }
     }
-} 
+}
