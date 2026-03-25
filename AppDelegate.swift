@@ -25,6 +25,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if arguments.contains("-testMode") {
             AppSettings.shared.testModeEnabled = true
             LogManager.shared.log("测试模式已启用", level: .info)
+        } else {
+            AppSettings.shared.testModeEnabled = false
         }
     }
     
